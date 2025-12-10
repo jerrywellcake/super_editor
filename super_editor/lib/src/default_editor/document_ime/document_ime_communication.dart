@@ -174,11 +174,34 @@ class DocumentImeInputClient extends TextInputConnectionDecorator with TextInput
   // What the platform IME *thinks* the current value is.
   TextEditingValue _platformTextEditingValue = const TextEditingValue();
 
+  // To detect if the selection is equal to the composing mode.
+  // This will be used to update the selection to the composing range
+  // to match the platform state to prevent from update the data from
+  // Super Editor to the platform IME.
+  bool _isSelectionEqualComposingMode = false;
+
   void _updatePlatformImeValueWithDeltas(List<TextEditingDelta> textEditingDeltas) {
     // Apply the deltas to the previous platform-side IME value, to find out
     // what the platform thinks the IME value is, right now.
     for (final delta in textEditingDeltas) {
-      _platformTextEditingValue = delta.apply(_platformTextEditingValue);
+      var newPlatformTextEditingValue = delta.apply(_platformTextEditingValue);
+
+      if (delta.composing.isValid && (delta is TextEditingDeltaInsertion)) {
+        if (!delta.selection.isCollapsed &&
+            delta.composing.start == delta.selection.baseOffset &&
+            delta.composing.end == delta.selection.extentOffset) {
+          _isSelectionEqualComposingMode = true;
+
+          newPlatformTextEditingValue = newPlatformTextEditingValue.copyWith(
+            selection: delta.selection.copyWith(
+              baseOffset: delta.composing.start,
+              extentOffset: delta.composing.end,
+            ),
+          );
+        }
+      }
+
+      _platformTextEditingValue = newPlatformTextEditingValue;
     }
   }
 
@@ -272,6 +295,15 @@ class DocumentImeInputClient extends TextInputConnectionDecorator with TextInput
     editorImeLog
         .fine("[DocumentImeInputClient] - Adding invisible characters?: ${imeSerialization.didPrependPlaceholder}");
     TextEditingValue textEditingValue = imeSerialization.toTextEditingValue();
+
+    if (_isSelectionEqualComposingMode && textEditingValue.composing.isValid) {
+      textEditingValue = textEditingValue.copyWith(
+        selection: textEditingValue.selection.copyWith(
+          baseOffset: _platformTextEditingValue.selection.baseOffset,
+          extentOffset: _platformTextEditingValue.selection.extentOffset,
+        ),
+      );
+    }
 
     editorImeLog.fine("[DocumentImeInputClient] - Sending IME serialization:");
     editorImeLog.fine("[DocumentImeInputClient] - $textEditingValue");
