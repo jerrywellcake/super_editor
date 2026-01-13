@@ -14,6 +14,7 @@ import 'package:super_editor/src/infrastructure/actions.dart';
 import 'package:super_editor/src/infrastructure/flutter/flutter_scheduler.dart';
 import 'package:super_editor/src/infrastructure/ime_input_owner.dart';
 import 'package:super_editor/src/infrastructure/platforms/ios/ios_document_controls.dart';
+import 'package:super_editor/src/infrastructure/platforms/browser_info.dart';
 import 'package:super_editor/src/infrastructure/platforms/platform.dart';
 import 'package:super_editor/src/infrastructure/render_sliver_ext.dart';
 
@@ -276,6 +277,7 @@ class SuperEditorImeInteractorState extends State<SuperEditorImeInteractor> impl
       textDeltasDocumentEditor: _textDeltasDocumentEditor,
       imeConnection: _imeConnection,
       onPerformSelector: _onPerformSelector,
+      isSafari: SuperBrowserInfo.isSafari,
     );
   }
 

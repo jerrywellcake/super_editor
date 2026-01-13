@@ -27,6 +27,7 @@ class DocumentImeInputClient extends TextInputConnectionDecorator with TextInput
     required this.imeConnection,
     required this.onPerformSelector,
     this.floatingCursorController,
+    this.isSafari = false,
   }) {
     // Note: we don't listen to document changes because we expect that any change during IME
     // editing will also include a selection change. If we listen to documents and selections, then
@@ -67,6 +68,9 @@ class DocumentImeInputClient extends TextInputConnectionDecorator with TextInput
 
   // TODO: get floating cursor out of here. Use a multi-client IME decorator to split responsibilities
   late FloatingCursorController? floatingCursorController;
+
+  /// Whether the current browser is Safari.
+  final bool isSafari;
 
   /// Whether the floating cursor is being displayed.
   ///
@@ -154,6 +158,25 @@ class DocumentImeInputClient extends TextInputConnectionDecorator with TextInput
       editorImeLog.fine(
           "Sending forceful update to IME because our local TextEditingValue didn't change, but the IME may have:");
       editorImeLog.fine("$newValue");
+
+      // In Safari, the incoming text editing event contains the same range and length
+      // for both the text "selection range" and the "composing range".
+      // When Super Editor tries to sync the internal editing state to the browser input
+      // (usually a collapse seleciton),
+      // it causes a selection mismatch. We can’t find the root cause because the logic
+      // is handled at a lower level in the engine layer.
+      // Therefore, we apply this as a workaround patch.
+      if (isSafari &&
+          newValue.isComposingRangeValid &&
+          _textEditingDeltas.isNotEmpty) {
+        newValue = newValue.copyWith(
+          selection: newValue.selection.copyWith(
+            baseOffset: _textEditingDeltas.last.selection.baseOffset,
+            extentOffset: _textEditingDeltas.last.selection.extentOffset,
+          ),
+        );
+      }
+
       imeConnection.value?.setEditingState(newValue);
     } else {
       editorImeLog.fine("Ignoring new TextEditingValue because it's the same as the existing one: $newValue");
@@ -188,6 +211,8 @@ class DocumentImeInputClient extends TextInputConnectionDecorator with TextInput
     editorImeLog.shout("Delta text input client received a non-delta TextEditingValue from OS: $value");
   }
 
+  List<TextEditingDelta> _textEditingDeltas = [];
+
   @override
   void updateEditingValueWithDeltas(List<TextEditingDelta> textEditingDeltas) {
     if (textEditingDeltas.isEmpty) {
@@ -219,6 +244,10 @@ class DocumentImeInputClient extends TextInputConnectionDecorator with TextInput
     for (final delta in textEditingDeltas) {
       editorImeLog.fine("$delta");
     }
+
+    _textEditingDeltas
+      ..clear()
+      ..addAll(textEditingDeltas);
 
     final imeValueBeforeChange = currentTextEditingValue;
     editorImeLog.fine("IME value before applying deltas: $imeValueBeforeChange");
