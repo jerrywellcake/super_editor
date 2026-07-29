@@ -34,6 +34,11 @@ abstract class TextInputConnectionDecorator implements TextInputConnection {
   @override
   void setComposingRect(Rect rect) => client?.setComposingRect(rect);
 
+  // Flutter 3.44 deprecated `TextInputConnection.setStyle` in favour of
+  // `updateStyle`, which also carries letterSpacing/wordSpacing/lineHeight.
+  @override
+  void updateStyle(TextInputStyle style) => client?.updateStyle(style);
+
   @override
   void setStyle(
           {required String? fontFamily,
