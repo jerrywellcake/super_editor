@@ -166,15 +166,8 @@ class DocumentImeInputClient extends TextInputConnectionDecorator with TextInput
       // it causes a selection mismatch. We can’t find the root cause because the logic
       // is handled at a lower level in the engine layer.
       // Therefore, we apply this as a workaround patch.
-      if (isSafari &&
-          newValue.isComposingRangeValid &&
-          _textEditingDeltas.isNotEmpty) {
-        newValue = newValue.copyWith(
-          selection: newValue.selection.copyWith(
-            baseOffset: _textEditingDeltas.last.selection.baseOffset,
-            extentOffset: _textEditingDeltas.last.selection.extentOffset,
-          ),
-        );
+      if (isSafari && newValue.isComposingRangeValid && _textEditingDeltas.isNotEmpty) {
+        newValue = adoptPlatformSelection(newValue, _textEditingDeltas.last.selection);
       }
 
       imeConnection.value?.setEditingState(newValue);
@@ -211,7 +204,7 @@ class DocumentImeInputClient extends TextInputConnectionDecorator with TextInput
     editorImeLog.shout("Delta text input client received a non-delta TextEditingValue from OS: $value");
   }
 
-  List<TextEditingDelta> _textEditingDeltas = [];
+  final List<TextEditingDelta> _textEditingDeltas = [];
 
   @override
   void updateEditingValueWithDeltas(List<TextEditingDelta> textEditingDeltas) {
@@ -367,4 +360,49 @@ class DocumentImeInputClient extends TextInputConnectionDecorator with TextInput
   void connectionClosed() {
     editorImeLog.info("IME connection was closed");
   }
+}
+
+/// Returns [value] carrying [platformSelection], clamped to the bounds of [value]'s
+/// own text.
+///
+/// [platformSelection] indexes the text the *platform* holds, which isn't always as
+/// long as the text we're about to send it, so its offsets can point past the end of
+/// [value]. They have to be clamped before they're adopted.
+///
+/// The web engine stores whatever we hand it as its `lastEditingState`, but only
+/// applies it to the DOM through `setSelectionRange()`, which the browser silently
+/// clamps to the text length. Handing over an out-of-bounds offset therefore leaves
+/// the engine believing in a caret the DOM never accepted. The next delta the engine
+/// infers is computed against that phantom offset, producing a replacement range that
+/// is either inverted or past the end of our text, and applying such a delta throws a
+/// `RangeError` out of `TextEditingDelta.apply()`.
+///
+/// Clamping doesn't pick a new caret position - it reports the position the browser
+/// was always going to land on anyway.
+TextEditingValue adoptPlatformSelection(
+  TextEditingValue value,
+  TextSelection platformSelection,
+) {
+  if (!platformSelection.isValid) {
+    // The platform didn't report a selection. Adopting -1 offsets would make the whole
+    // value invalid, and the engine drops invalid values without ever writing them to
+    // the DOM - the very desync we're trying to avoid. Keep our own selection.
+    return value;
+  }
+
+  final maxOffset = value.text.length;
+  final baseOffset = platformSelection.baseOffset.clamp(0, maxOffset);
+  final extentOffset = platformSelection.extentOffset.clamp(0, maxOffset);
+
+  if (baseOffset != platformSelection.baseOffset || extentOffset != platformSelection.extentOffset) {
+    editorImeLog.warning(
+        "The platform's selection ($platformSelection) points outside the text we're sending it (length $maxOffset). Clamping to $baseOffset..$extentOffset.");
+  }
+
+  return value.copyWith(
+    selection: value.selection.copyWith(
+      baseOffset: baseOffset,
+      extentOffset: extentOffset,
+    ),
+  );
 }
