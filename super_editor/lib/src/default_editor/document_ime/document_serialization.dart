@@ -214,16 +214,26 @@ class DocumentImeSerializer {
       editorImeLog.fine("The IME is only composing visible characters. No adjustment necessary.");
     }
 
-    return DocumentRange(
-      start: _imeToDocumentPosition(
-        TextPosition(offset: imeRange.start),
-        isUpstream: false,
-      ),
-      end: _imeToDocumentPosition(
-        TextPosition(offset: imeRange.end),
-        isUpstream: false,
-      ),
+    // This serialization can be stale by the time we get here: `applyDeltas()`
+    // serializes the document, applies the deltas - which can delete or merge nodes -
+    // and only then maps the composing region back. When an end no longer resolves,
+    // report "no range" the same way we do for the other unmappable cases above.
+    // Callers treat a null range as "clear the composing region".
+    final start = _imeToDocumentPositionOrNull(
+      TextPosition(offset: imeRange.start),
+      isUpstream: false,
     );
+    final end = _imeToDocumentPositionOrNull(
+      TextPosition(offset: imeRange.end),
+      isUpstream: false,
+    );
+
+    if (start == null || end == null) {
+      editorImeLog.fine("The IME range no longer maps to the document. Returning null document range.");
+      return null;
+    } else {
+      return DocumentRange(start: start, end: end);
+    }
   }
 
   /// Returns `true` if the [imePosition] is inside the prepended placeholder,
@@ -262,14 +272,28 @@ class DocumentImeSerializer {
         : const TextPosition(offset: 0);
   }
 
-  DocumentPosition _imeToDocumentPosition(TextPosition imePosition, {required bool isUpstream}) {
+  /// Maps [imePosition] to a document position, or returns `null` when it can't be
+  /// mapped.
+  ///
+  /// A node this serialization refers to can disappear before the mapping runs:
+  /// `applyDeltas()` serializes the document, applies the deltas - which can delete
+  /// or merge nodes - and only then maps the composing region back. Ranges that
+  /// point at a node the document no longer holds are skipped rather than
+  /// dereferenced.
+  DocumentPosition? _imeToDocumentPositionOrNull(TextPosition imePosition, {required bool isUpstream}) {
     for (final range in imeRangesToDocTextNodes.keys) {
       if (range.start <= imePosition.offset && imePosition.offset <= range.end) {
-        final node = _doc.getNodeById(imeRangesToDocTextNodes[range]!)!;
+        final nodeId = imeRangesToDocTextNodes[range]!;
+        final node = _doc.getNodeById(nodeId);
+        if (node == null) {
+          // This serialization is stale for this range. Keep looking - another range
+          // may still cover this offset.
+          continue;
+        }
 
         if (node is TextNode) {
           return DocumentPosition(
-            nodeId: imeRangesToDocTextNodes[range]!,
+            nodeId: nodeId,
             nodePosition: TextNodePosition(offset: imePosition.offset - range.start),
           );
         } else {
@@ -290,6 +314,15 @@ class DocumentImeSerializer {
       }
     }
 
+    return null;
+  }
+
+  DocumentPosition _imeToDocumentPosition(TextPosition imePosition, {required bool isUpstream}) {
+    final documentPosition = _imeToDocumentPositionOrNull(imePosition, isUpstream: isUpstream);
+    if (documentPosition != null) {
+      return documentPosition;
+    }
+
     editorImeLog.shout("---------------DocumentImeSerializer----------------------");
     editorImeLog.shout("Couldn't map an IME position to a document position.");
     editorImeLog.shout("Desired IME position: '$imePosition'");
@@ -303,7 +336,12 @@ class DocumentImeSerializer {
     editorImeLog.shout("IME Ranges to text nodes:");
     for (final entry in imeRangesToDocTextNodes.entries) {
       editorImeLog.shout(" - IME range: ${entry.key} -> Text node: ${entry.value}");
-      editorImeLog.shout("    ^ node content: '${(_doc.getNodeById(entry.value) as TextNode).text.toPlainText()}'");
+      // The node may be gone, or no longer be a TextNode. This is the diagnostic for
+      // a broken mapping, so it must not throw on its way out.
+      final mappedNode = _doc.getNodeById(entry.value);
+      final nodeContent =
+          mappedNode is TextNode ? "'${mappedNode.text.toPlainText()}'" : "<no longer a text node in the document>";
+      editorImeLog.shout("    ^ node content: $nodeContent");
     }
     editorImeLog.shout("-----------------------------------------------------------");
     throw Exception(
